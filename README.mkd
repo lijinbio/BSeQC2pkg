@@ -1,0 +1,4 @@
+# BSeQC 2.0
+
+Quality control of the bisulfite-sequencing samples.
+
