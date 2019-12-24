@@ -20,21 +20,21 @@ class Opts {
 		string outfile;
 		string reference;
 		int length;
-		int numthreads;
+		int numreads;
 	public:
 		Opts():
 			infile("")
 			, outfile("")
 			, reference("")
 			, length(150)
-			, numthreads(1) { }
+			, numreads(2000000) { }
 	public:
 		void out() {
 			cout << "infile: " << infile << endl;
 			cout << "outfile: " << outfile << endl;
 			cout << "reference: " << reference << endl;
 			cout << "length: " << length << endl;
-			cout << "numthreads: " << numthreads << endl;
+			cout << "numreads: " << numreads << endl;
 		}
 } opts;
 
@@ -48,7 +48,7 @@ int parse_options(int ac, const char ** av) {
 			("outfile,o", value<string>()->default_value(""), "Output statistics.")
 			("reference,r", value<string>()->default_value(""), "Reference FASTA file.")
 			("length,l", value<int>()->default_value(150), "Read length. Default: 150.")
-			("numthreads,t", value<int>()->default_value(1), "Number of threads. Default: 1.")
+			("numreads,n", value<int>()->default_value(2000000), "Number of reads. First `n` reads will be examined. Default: 2000000.")
 			;
 
 		variables_map vm;
@@ -58,9 +58,9 @@ int parse_options(int ac, const char ** av) {
 		if (vm.count("help")) {
 			cout << desc << endl;
 			cout << "Examples:" <<endl;
-			cout << "  " << av[0] << " -i in.bam -o readcount.txt -t 8 -l 160 -r hg38.fa" << endl;
+			cout << "  " << av[0] << " -i in.bam -o readcount.txt -r hg38.fa -l 100" << endl;
 			cout << endl;
-			cout << "Date: 2019/12/17" << endl;
+			cout << "Date: 2019/12/24" << endl;
 			cout << "Authors: Jin Li <lijin.abc@gmail.com>" << endl;
 			exit(1);
 		}
@@ -71,8 +71,8 @@ int parse_options(int ac, const char ** av) {
 				opts.infile=vm[k].as<string>();
 			} else if(k=="length"){
 				opts.length=vm[k].as<int>();
-			} else if(k=="numthreads"){
-				opts.numthreads=vm[k].as<int>();
+			} else if(k=="numreads"){
+				opts.numreads=vm[k].as<int>();
 			} else if(k=="reference"){
 				opts.reference=vm[k].as<string>();
 			} else if(k=="outfile"){
@@ -104,7 +104,7 @@ int parse_options(int ac, const char ** av) {
 	return 0;
 }
 
-void refbychr(string infile, string chr, string & ref)
+int refbychr(string infile, string chr, string & ref)
 {
 	ifstream fin(infile);
 	string line;
@@ -119,14 +119,12 @@ void refbychr(string infile, string chr, string & ref)
 		}
 	}
 	fin.close();
+	return 0;
 }
 
-// Global map for each chr, remember to clear for each chr
-map< int, map< string, vector< vector< int > > > > chrtagreadcounts; // chrid->tag->[[c1,...,clength],[t1,...,tlength]]
-static int addtag(const bam1_t *b, void *data) {
+int addtag(const bam1_t *b, string & ref, vector< vector< int > > & readcounts) {
 	if(b->core.n_cigar > 3) return 1;
 
-	string &ref = *(static_cast< string* >(data));
 	size_t qlen=b->core.l_qseq;
 	if (opts.length<qlen) {
 		cerr << "Error: the input length is less than the read length " << qlen << endl;
@@ -197,230 +195,365 @@ static int addtag(const bam1_t *b, void *data) {
 	}
 	boost::to_upper(refseq);
 
-	map< string, vector< vector< int > > > &tagreadcounts=chrtagreadcounts[b->core.tid]; // tag->[[c1,...,clength],[t1,...,tlength]]
-	map< string, vector< vector< int > > > :: iterator it=tagreadcounts.find(tag);
-	if (tagreadcounts.end()!=it) {
-		if (forwardstrand) {
-			if (forwardsave) {
-				for (int i=0; i<qlen; ++i) {
-					if (refseq[i]=='C') {
-						if (refseq[i+1]=='G') {
-							it->second[0][i]+=(seq[i]=='C');
-							it->second[1][i]+=(seq[i]=='T');
-						} else {
-							it->second[2][i]+=(seq[i]=='C');
-							it->second[3][i]+=(seq[i]=='T');
-						}
-					}
-				}
-			} else {
-				for (int i=0; i<qlen; ++i) {
-					if (refseq[i]=='C') {
-						if (refseq[i+1]=='G') {
-							it->second[0][qlen-1-i]+=(seq[i]=='C');
-							it->second[1][qlen-1-i]+=(seq[i]=='T');
-						} else {
-							it->second[2][qlen-1-i]+=(seq[i]=='C');
-							it->second[3][qlen-1-i]+=(seq[i]=='T');
-						}
+	if (forwardstrand) {
+		if (forwardsave) {
+			for (int i=0; i<qlen; ++i) {
+				if (refseq[i]=='C') {
+					if (refseq[i+1]=='G') {
+						readcounts[0][i]+=(seq[i]=='C');
+						readcounts[1][i]+=(seq[i]=='T');
+					} else {
+						readcounts[2][i]+=(seq[i]=='C');
+						readcounts[3][i]+=(seq[i]=='T');
 					}
 				}
 			}
 		} else {
-			if (forwardsave) {
-				for (int i=0; i<qlen; ++i) {
+			for (int i=0; i<qlen; ++i) {
+				if (refseq[i]=='C') {
 					if (refseq[i+1]=='G') {
-						if (refseq[i]=='C') {
-							it->second[0][i]+=(seq[i]=='G');
-							it->second[1][i]+=(seq[i]=='A');
-						} else {
-							it->second[2][i]+=(seq[i]=='G');
-							it->second[3][i]+=(seq[i]=='A');
-						}
-					}
-				}
-			} else {
-				for (int i=0; i<qlen; ++i) {
-					if (refseq[i+1]=='G') {
-						if (refseq[i]=='C') {
-							it->second[0][qlen-1-i]+=(seq[i]=='G');
-							it->second[1][qlen-1-i]+=(seq[i]=='A');
-						} else {
-							it->second[2][qlen-1-i]+=(seq[i]=='G');
-							it->second[3][qlen-1-i]+=(seq[i]=='A');
-						}
+						readcounts[0][qlen-1-i]+=(seq[i]=='C');
+						readcounts[1][qlen-1-i]+=(seq[i]=='T');
+					} else {
+						readcounts[2][qlen-1-i]+=(seq[i]=='C');
+						readcounts[3][qlen-1-i]+=(seq[i]=='T');
 					}
 				}
 			}
 		}
 	} else {
-		vector< vector< int > > readcounts(4, vector< int > (opts.length, 0));
-		if (forwardstrand) {
-			if (forwardsave) {
-				for (int i=0; i<qlen; ++i) {
+		if (forwardsave) {
+			for (int i=0; i<qlen; ++i) {
+				if (refseq[i+1]=='G') {
 					if (refseq[i]=='C') {
-						if (refseq[i+1]=='G') {
-							readcounts[0][i]+=(seq[i]=='C'); // CG
-							readcounts[1][i]+=(seq[i]=='T');
-						} else {
-							readcounts[2][i]+=(seq[i]=='C'); // CH
-							readcounts[3][i]+=(seq[i]=='T');
-						}
-					}
-				}
-			} else {
-				for (int i=0; i<qlen; ++i) {
-					if (refseq[i]=='C') {
-						if (refseq[i+1]=='G') {
-							readcounts[0][qlen-1-i]+=(seq[i]=='C'); // CG
-							readcounts[1][qlen-1-i]+=(seq[i]=='T');
-						} else {
-							readcounts[2][qlen-1-i]+=(seq[i]=='C'); // CH
-							readcounts[3][qlen-1-i]+=(seq[i]=='T');
-						}
+						readcounts[0][i]+=(seq[i]=='G');
+						readcounts[1][i]+=(seq[i]=='A');
+					} else {
+						readcounts[2][i]+=(seq[i]=='G');
+						readcounts[3][i]+=(seq[i]=='A');
 					}
 				}
 			}
 		} else {
-			if (forwardsave) {
-				for (int i=0; i<qlen; ++i) {
-					if (refseq[i+1]=='G') {
-						if (refseq[i]=='C') {
-							readcounts[0][i]+=(seq[i]=='G'); // CG
-							readcounts[1][i]+=(seq[i]=='A');
-						} else {
-							readcounts[2][i]+=(seq[i]=='G'); // CH
-							readcounts[3][i]+=(seq[i]=='A');
-						}
-					}
-				}
-			} else {
-				for (int i=0; i<qlen; ++i) {
-					if (refseq[i+1]=='G') {
-						if (refseq[i]=='C') {
-							readcounts[0][qlen-1-i]+=(seq[i]=='G'); // CG
-							readcounts[1][qlen-1-i]+=(seq[i]=='A');
-						} else {
-							readcounts[2][qlen-1-i]+=(seq[i]=='G'); // CH
-							readcounts[3][qlen-1-i]+=(seq[i]=='A');
-						}
+			for (int i=0; i<qlen; ++i) {
+				if (refseq[i+1]=='G') {
+					if (refseq[i]=='C') {
+						readcounts[0][qlen-1-i]+=(seq[i]=='G');
+						readcounts[1][qlen-1-i]+=(seq[i]=='A');
+					} else {
+						readcounts[2][qlen-1-i]+=(seq[i]=='G');
+						readcounts[3][qlen-1-i]+=(seq[i]=='A');
 					}
 				}
 			}
 		}
-		tagreadcounts[tag]=readcounts;
 	}
 	return 0;
 }
 
-void bseqcreadcountschrbatch(string bamfile, vector< string > chrs) {
+int file2readtags(string & infile, map< string, vector< string > > & readtags) {
 	samfile_t *in=0;
-	if ((in=samopen(bamfile.c_str(), "rb", 0))==0) {
-		cerr << "Error: not found " << bamfile << endl;
-		return;
-	}
-
-	map< string, int > chr2tid;
-	for (int i=0; i<in->header->n_targets; i++) {
-		chr2tid[in->header->target_name[i]]=i;
-	}
-
-	bam_index_t *idx=0;
-	idx = bam_index_load(bamfile.c_str());
-	if (idx==0) {
-		cerr << "Error: not found index file of " << bamfile << endl;
-		return;
-	}
-	for (string &chr : chrs) {
-		cout << "Start chromosome " << chr << endl;
-		string ref;
-		refbychr(opts.reference, chr, ref);
-		int tid, beg, end, result;
-		bam_parse_region(in->header, chr.c_str(), &tid, &beg, &end);
-		if (tid<0) { 
-			cerr << "Error: unknown reference name " << chr << endl;
-			return;
-		}
-		result=bam_fetch(in->x.bam, idx, tid, beg, end, static_cast<void*>(&ref), addtag);
-		if (result<0) {
-			cerr << "Error: failed to retrieve region " << chr << endl;
-			return;
-		}
-		cout << "End chromosome " << chr << endl;
-	}
-	samclose(in);
-	bam_index_destroy(idx);
-}
-
-int bseqcreadcounts(string bamfile)
-{
-	samfile_t *in=0;
-	if ((in=samopen(bamfile.c_str(), "rb", 0))==0) {
-		cerr << "Error: not found " << bamfile << endl;
+	if ((in=samopen(infile.c_str(), "rb", 0))==0) {
+		cerr << "Error: not found " << infile << endl;
 		return 1;
 	}
-	vector< string> chroms;
-	for (int i=0; i<in->header->n_targets; i++) {
-		chroms.push_back(in->header->target_name[i]);
+	int r=0;
+	int count=0;
+	bam1_t *b=bam_init1();
+	while (count<opts.numreads && (r=samread(in, b))>=0) {
+		uint32_t flag=b->core.flag;
+		if (flag & 0x100) continue;
+		string qname=string((char*)bam1_qname(b));
+		string zs=string((char *)bam_aux2Z(bam_aux_get(b, "ZS")));
+		map< string, vector< string > > :: iterator it=readtags.find(qname);
+		if (readtags.end()!=it) {
+			if (flag & 0x40) {
+				it->second[0]=zs;
+			} else if (flag & 0x80) {
+				it->second[1]=zs;
+			}
+		} else {
+			vector< string > tag(2, "N");
+			if (flag & 0x40) {
+				tag[0]=zs;
+			} else if (flag & 0x80) {
+				tag[1]=zs;
+			}
+			readtags[qname]=tag;
+		}
+		count++;
 	}
 	samclose(in);
+	return 0;
+}
 
-	vector< vector< string > > chrbatch;
-	for (int i=0; i<chroms.size(); i++) {
-		if (i>=opts.numthreads) {
-			chrbatch[i%opts.numthreads].push_back(chroms[i]);
+int readtags2tagstats(map< string, vector< string > > & readtags, map< string, int > & tagstats) {
+	for (map< string, vector< string > > :: iterator it=readtags.begin(); readtags.end()!=it; ++it) {
+		string tag=it->second[0] + "," + it->second[1];
+		map< string, int > :: iterator tit=tagstats.find(tag);
+		if (tagstats.end()!=tit) {
+			tit->second++;
 		} else {
-			vector< string > chrs {chroms[i]};
-			chrbatch.push_back(chrs);
+			tagstats[tag]=1;
 		}
 	}
+	return 0;
+}
 
-	vector<thread> threads;
-	for (vector< string > &chrs : chrbatch) {
-		threads.push_back(thread(bseqcreadcountschrbatch, bamfile, chrs));
+int file2tagreadcounts(string & infile, map< string, vector< string > > & readtags, map< string, vector< vector< vector< int > > > > & tagreadcounts) {
+	samfile_t *in=0;
+	if ((in=samopen(infile.c_str(), "rb", 0))==0) {
+		cerr << "Error: not found " << infile << endl;
+		return 1;
 	}
-	for (auto& th : threads) {
-		th.join();
+	int r=0;
+	int count=0;
+	bam1_t *b=bam_init1();
+	map< string, string > chrref; // chr->ref
+	while (count<opts.numreads && (r=samread(in, b))>=0) {
+		uint32_t flag=b->core.flag;
+		if (flag & 0x100) continue;
+		count++;
+
+		string qname=string((char*)bam1_qname(b));
+		string tag=readtags[qname][0] + "," + readtags[qname][1];
+		string chr=in->header->target_name[b->core.tid];
+		map< string, string > :: iterator itref=chrref.find(chr);
+		if (chrref.end()==itref) {
+			string ref;
+			refbychr(opts.reference, chr, ref);
+			chrref[chr]=ref;
+		}
+		if (flag & 0x40) {
+			vector< vector< int > > &readcounts=tagreadcounts[tag][0];
+			addtag(b, chrref[chr], readcounts);
+		} else if (flag & 0x80) {
+			vector< vector< int > > &readcounts=tagreadcounts[tag][1];
+			addtag(b, chrref[chr], readcounts);
+		}
 	}
+	samclose(in);
+	return 0;
+}
 
-	map< string, vector< vector< int > > > tagsresult;
-	for (map< int, map< string, vector< vector< int > > > > :: iterator it=chrtagreadcounts.begin(); chrtagreadcounts.end()!=it; ++it) {
-		map< string, vector< vector< int > > > &tagreadcounts=it->second;
-		for (map< string, vector< vector< int > > > :: iterator ittag=tagreadcounts.begin(); tagreadcounts.end()!=ittag; ++ittag) {
-			string tag=ittag->first;
-			vector< vector< int > > &rctag=ittag->second;
-
-			map< string, vector< vector< int > > > :: iterator ithit=tagsresult.find(tag);
-			if (tagsresult.end()!=ithit) {
-				vector< vector< int > > &readcounts=ithit->second;
-				for (int i=0; i<readcounts.size(); i++) {
-					for (int j=0; j<readcounts[i].size(); j++) {
-						readcounts[i][j]+=rctag[i][j];
+int tagreadcounts2tagrcstrand(map< string, vector< vector< vector< int > > > > &tagreadcounts, map< string, vector< vector< int > > > &tagrcstrand) {
+	for (map< string, vector< vector< vector< int > > > > :: iterator it=tagreadcounts.begin(); it!=tagreadcounts.end(); ++it) {
+		vector< string > tags;
+		boost::split(tags, it->first, boost::is_any_of(","));
+		for (int e=0; e<tags.size(); e++) {
+			string tag=tags[e];
+			if (tag!="N") {
+				map< string, vector< vector< int > > > :: iterator ittag=tagrcstrand.find(tag);
+				if (ittag!=tagrcstrand.end()) {
+					for (int i=0; i<ittag->second.size(); i++) {
+						for (int j=0; j<ittag->second[i].size(); j++) {
+							ittag->second[i][j]+=it->second[e][i][j];
+						}
 					}
+				} else {
+					vector< vector< int > > rc(4, vector< int > (opts.length, 0));
+					for (int i=0; i<rc.size(); i++) {
+						for (int j=0; j<rc[i].size(); j++) {
+							rc[i][j]=it->second[e][i][j];
+						}
+					}
+					tagrcstrand[tag]=rc;
 				}
-			} else {
-				tagsresult[tag]=rctag;
 			}
 		}
 	}
-	ofstream fout(opts.outfile);
-	fout << "position" << '\t' << "numC_CG" << '\t' << "numT_CG" << '\t' << "numC_CH" << '\t' << "numT_CH" << '\t' << "tag" << endl;
-	for (map< string, vector< vector< int > > > :: iterator it=tagsresult.begin(); it!=tagsresult.end(); ++it) {
+	return 0;
+}
+
+int tagrcs2methbsr(map< string, vector< vector< vector< int > > > > & tagreadcounts, map< string, vector< double > > & methbsr)
+{
+	for (map< string, vector< vector< vector< int > > > > :: iterator it=tagreadcounts.begin(); tagreadcounts.end()!=it; ++it) {
 		string tag=it->first;
-		vector< int > &ccg=it->second[0];
-		vector< int > &tcg=it->second[1];
-		vector< int > &cch=it->second[2];
-		vector< int > &tch=it->second[3];
-		for (int i=0; i<ccg.size(); i++) {
-			fout << i+1 << '\t' << ccg[i] << '\t' << tcg[i] << '\t' << cch[i] << '\t' << tch[i] << '\t' << tag << endl;
+		vector< double > bsr(4, -1);
+		vector< int > end1sum(4, 0);
+		for (int i=0; i<it->second[0].size(); ++i) {
+			for (int j=0; j<it->second[0][i].size(); ++j) {
+				end1sum[i]+=it->second[0][i][j];
+			}
+		}
+		if (end1sum[0]+end1sum[1]>0) {
+			bsr[0]=1.0*end1sum[0]/(end1sum[0]+end1sum[1]);
+		}
+		if (end1sum[2]+end1sum[3]>0) {
+			bsr[1]=1.0*end1sum[2]/(end1sum[2]+end1sum[3]);
+		}
+
+		vector< int > end2sum(4, 0);
+		for (int i=0; i<it->second[1].size(); ++i) {
+			for (int j=0; j<it->second[1][i].size(); ++j) {
+				end2sum[i]+=it->second[1][i][j];
+			}
+		}
+		if (end2sum[0]+end2sum[1]>0) {
+			bsr[2]=1.0*end2sum[0]/(end2sum[0]+end2sum[1]);
+		}
+		if (end2sum[2]+end2sum[3]>0) {
+			bsr[3]=1.0*end2sum[2]/(end2sum[2]+end2sum[3]);
+		}
+		methbsr[tag]=bsr;
+	}
+	return 0;
+}
+
+int tagrcs2methbsrstrand(map< string, vector< vector< int > > > &tagrcstrand, map< string, vector< double > > &methbsrstrand)
+{
+	for (map< string, vector< vector< int > > > :: iterator it=tagrcstrand.begin(); tagrcstrand.end()!=it; ++it) {
+		string tag=it->first;
+		vector< double > bsr(2, -1);
+		vector< int > sum(4, 0);
+		for (int i=0; i<it->second.size(); ++i) {
+			for (int j=0; j<it->second[i].size(); ++j) {
+				sum[i]+=it->second[i][j];
+			}
+		}
+		if (sum[0]+sum[1]>0) {
+			bsr[0]=1.0*sum[0]/(sum[0]+sum[1]);
+		}
+		if (sum[2]+sum[3]>0) {
+			bsr[1]=1.0*sum[2]/(sum[2]+sum[3]);
+		}
+		methbsrstrand[tag]=bsr;
+	}
+	return 0;
+}
+
+int methbsr2file(string & outfile, map< string, int > & tagstats, map< string, vector< double > > & methbsr)
+{
+	ofstream fout(outfile);
+	fout << "tag" << '\t' << "numreads" << '\t' << "meth1_CG" << '\t' << "meth1_CH" << '\t' << "meth2_CG" << '\t' << "meth2_CH" << endl;
+	for (map< string, int > :: iterator it=tagstats.begin(); it!=tagstats.end(); ++it) {
+		string tag=it->first;
+		int numreads=it->second;
+		double meth1cg=methbsr[tag][0];
+		double meth1ch=methbsr[tag][1];
+		double meth2cg=methbsr[tag][2];
+		double meth2ch=methbsr[tag][3];
+		fout << tag << '\t' << numreads << '\t' << meth1cg << '\t' << meth1ch << '\t' << meth2cg << '\t' << meth2ch << endl;
+	}
+	return 0;
+}
+
+int estimateprotocol(map< string, int > & tagstats, bool & pico, double & errorrate) {
+	if ((tagstats.end()!=tagstats.find("++,+-")
+				&& tagstats.end()!=tagstats.find("+-,++")
+				&& tagstats["++,+-"]<10*tagstats["+-,++"]
+				&& tagstats["+-,++"]<10*tagstats["++,+-"])
+			|| (tagstats.end()!=tagstats.find("-+,--")
+				&& tagstats.end()!=tagstats.find("--,-+")
+				&& tagstats["-+,--"]<10*tagstats["--,-+"]
+				&& tagstats["--,-+"]<10*tagstats["-+,--"]
+				))
+	{
+		pico=true;
+	}
+
+	int total=0;
+	for(map< string, int > :: iterator it=tagstats.begin(); it!=tagstats.end(); ++it) {
+		total+=it->second;
+	}
+	if (total==0) return 1;
+	int postivenumber=0;
+	if (pico) {
+		vector < string > picotags {
+			"++,+-", "+-,++", "-+,--", "--,-+"
+				, "++,N", "N,++", "+-,N", "N,+-"
+				, "-+,N", "N,-+", "--,N", "N,--"
+		};
+		for (string &tag : picotags) {
+			map< string, int > :: iterator it=tagstats.find(tag);
+			if (tagstats.end()!=it) {
+				postivenumber+=it->second;
+			}
+		}
+	} else {
+		vector < string > tradtags {
+			"++,+-", "-+,--"
+				, "++,N", "N,+-"
+				, "-+,N", "N,--"
+		};
+		for (string &tag : tradtags) {
+			map< string, int > :: iterator it=tagstats.find(tag);
+			if (tagstats.end()!=it) {
+				postivenumber+=it->second;
+			}
 		}
 	}
+	errorrate=1.0-1.0*postivenumber/total;
+	return 0;
+}
+
+int bseqc() {
+	map< string, vector< string > > readtags; // qname->[tag1,tag2]
+	file2readtags(opts.infile, readtags);
+
+	map< string, int > tagstats; // tag->number
+	readtags2tagstats(readtags, tagstats);
+	bool pico=false;
+	double errorrate=1.0;
+	estimateprotocol(tagstats, pico, errorrate);
+
+	map< string, vector< vector< vector< int > > > > tagreadcounts; // tag->[end1,end2]; end[12]=[CG, CH]=[[c1,...,clength],[t1,...,tlength]]
+	for (map< string, int > :: iterator it=tagstats.begin(); tagstats.end()!=it; ++it) {
+		vector< vector< vector< int > > > twoendsreadcounts(2, vector< vector< int > > (4, vector< int > (opts.length, 0)));
+		tagreadcounts[it->first]=twoendsreadcounts;
+	}
+	file2tagreadcounts(opts.infile, readtags, tagreadcounts);
+
+	map< string, vector< double > > methbsr; // tag->[end1,end2]; end[12]=[CG, CH]
+	tagrcs2methbsr(tagreadcounts, methbsr);
+
+	map< string, vector< vector< int > > > tagrcstrand;
+	tagreadcounts2tagrcstrand(tagreadcounts, tagrcstrand);
+	map< string, vector< double > > methbsrstrand; // tag->[CG, CH]
+	tagrcs2methbsrstrand(tagrcstrand, methbsrstrand);
+
+	methbsr2file(opts.outfile, tagstats, methbsr);
+
+	cout << "tag" << '\t' << "end" << '\t' << "position" << '\t' << "numC_CG" << '\t' << "numT_CG" << '\t' << "numC_CH" << '\t' << "numT_CH" << endl;
+	for (map< string, vector< vector< vector< int > > > > :: iterator it=tagreadcounts.begin(); it!=tagreadcounts.end(); ++it) {
+		for (int e=0; e<it->second.size(); e++) {
+			for (int i=0; i<opts.length; i++) {
+				cout << it->first << '\t' << e << '\t' << i+1 << '\t' << it->second[e][0][i] << '\t' << it->second[e][1][i] << '\t' << it->second[e][2][i] << '\t' << it->second[e][3][i] << endl;
+			}
+		}
+	}
+
+	cout << "tag" << '\t' << "position" << '\t' << "numC_CG" << '\t' << "numT_CG" << '\t' << "numC_CH" << '\t' << "numT_CH" << endl;
+	for (map< string, vector< vector< int > > > :: iterator it=tagrcstrand.begin(); it!=tagrcstrand.end(); ++it) {
+		for (int i=0; i<opts.length; i++) {
+			cout << it->first << '\t' << i+1 << '\t' << it->second[0][i] << '\t' << it->second[1][i] << '\t' << it->second[2][i] << '\t' << it->second[3][i] << endl;
+		}
+	}
+
+	cout << "tag" << '\t' << "end1_methCG" << '\t' << "end1_methCH" << '\t' << "end2_methCG" << '\t' << "end2_methCH" << endl;
+	for (map< string, vector< double > > :: iterator it=methbsr.begin(); it!=methbsr.end(); ++it) {
+		cout << it->first;
+		for (int i=0; i<it->second.size(); i++) {
+			cout << '\t' << it->second[i];
+		}
+		cout << endl;
+	}
+
+	cout << "tag" << '\t' << "methCG" << '\t' << "methCH" << endl;
+	for (map< string, vector< double > > :: iterator it=methbsrstrand.begin(); it!=methbsrstrand.end(); ++it) {
+		cout << it->first;
+		for (int i=0; i<it->second.size(); i++) {
+			cout << '\t' << it->second[i];
+		}
+		cout << endl;
+	}
+
 	return 0;
 }
 
 int main(int argc, const char ** argv)
 {
 	parse_options(argc, argv);
-	bseqcreadcounts(opts.infile);
+	bseqc();
 	return 0;
 }
