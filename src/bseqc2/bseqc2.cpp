@@ -105,7 +105,7 @@ int parse_options(int ac, const char ** av) {
 			exit(1);
 		}
 		if (opts.rscript.empty()) {
-			opts.rscript=boost::filesystem::canonical(av[0]).parent_path().string()+"/bseqc2mbiasplot.R";
+			opts.rscript=boost::filesystem::canonical("/proc/self/exe").parent_path().string()+"/bseqc2mbiasplot.R";
 		}
 		opts.out();
 	} catch (const error &ex) {
