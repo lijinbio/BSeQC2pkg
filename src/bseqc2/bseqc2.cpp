@@ -1,4 +1,5 @@
 #include <boost/program_options.hpp>
+#include <boost/filesystem.hpp>
 #include <boost/algorithm/string.hpp>
 #include <map>
 #include <iostream>
@@ -21,11 +22,13 @@ class Opts {
 		string reference;
 		int length;
 		int numreads;
+		string rscript;
 	public:
 		Opts():
 			infile("")
 			, outfile("")
 			, reference("")
+			, rscript("")
 			, length(150)
 			, numreads(2000000) { }
 	public:
@@ -35,6 +38,7 @@ class Opts {
 			cout << "reference: " << reference << endl;
 			cout << "length: " << length << endl;
 			cout << "numreads: " << numreads << endl;
+			cout << "rscript: " << rscript << endl;
 		}
 } opts;
 
@@ -49,6 +53,7 @@ int parse_options(int ac, const char ** av) {
 			("reference,r", value<string>()->default_value(""), "Reference FASTA file.")
 			("length,l", value<int>()->default_value(150), "Read length. Default: 150.")
 			("numreads,n", value<int>()->default_value(2000000), "Number of reads. First `n` reads will be examined. Default: 2000000.")
+			("rscript,s", value<string>()->default_value(""), "Rscript for mbias plot. Default: `$bindir/bseqc2mbiasplot.R`.")
 			;
 
 		variables_map vm;
@@ -60,7 +65,7 @@ int parse_options(int ac, const char ** av) {
 			cout << "Examples:" <<endl;
 			cout << "  " << av[0] << " -i in.bam -o readcount.txt -r hg38.fa -l 100" << endl;
 			cout << endl;
-			cout << "Date: 2019/12/24" << endl;
+			cout << "Date: 2019/12/25" << endl;
 			cout << "Authors: Jin Li <lijin.abc@gmail.com>" << endl;
 			exit(1);
 		}
@@ -77,6 +82,8 @@ int parse_options(int ac, const char ** av) {
 				opts.reference=vm[k].as<string>();
 			} else if(k=="outfile"){
 				opts.outfile=vm[k].as<string>();
+			} else if(k=="rscript"){
+				opts.rscript=vm[k].as<string>();
 			} else {
 				cerr << "Error: invalid option " << k << endl;
 				exit(1);
@@ -96,6 +103,9 @@ int parse_options(int ac, const char ** av) {
 			cerr << "Error: -r|--reference must be specified." << endl;
 			cout << desc << endl;
 			exit(1);
+		}
+		if (opts.rscript.empty()) {
+			opts.rscript=boost::filesystem::canonical(av[0]).parent_path().string()+"/bseqc2mbiasplot.R";
 		}
 		opts.out();
 	} catch (const error &ex) {
@@ -422,22 +432,6 @@ int tagrcs2methbsrstrand(map< string, vector< vector< int > > > &tagrcstrand, ma
 	return 0;
 }
 
-int methbsr2file(string & outfile, map< string, int > & tagstats, map< string, vector< double > > & methbsr)
-{
-	ofstream fout(outfile);
-	fout << "tag" << '\t' << "numreads" << '\t' << "meth1_CG" << '\t' << "meth1_CH" << '\t' << "meth2_CG" << '\t' << "meth2_CH" << endl;
-	for (map< string, int > :: iterator it=tagstats.begin(); it!=tagstats.end(); ++it) {
-		string tag=it->first;
-		int numreads=it->second;
-		double meth1cg=methbsr[tag][0];
-		double meth1ch=methbsr[tag][1];
-		double meth2cg=methbsr[tag][2];
-		double meth2ch=methbsr[tag][3];
-		fout << tag << '\t' << numreads << '\t' << meth1cg << '\t' << meth1ch << '\t' << meth2cg << '\t' << meth2ch << endl;
-	}
-	return 0;
-}
-
 int estimateprotocol(map< string, int > & tagstats, bool & pico, double & errorrate) {
 	if ((tagstats.end()!=tagstats.find("++,+-")
 				&& tagstats.end()!=tagstats.find("+-,++")
@@ -487,6 +481,89 @@ int estimateprotocol(map< string, int > & tagstats, bool & pico, double & errorr
 	return 0;
 }
 
+int tagrc2file(string & outfile, map< string, vector< vector< vector< int > > > > & tagrc)
+{
+	ofstream fout(outfile);
+	fout << "tag" << '\t' << "end" << '\t' << "position" << '\t' << "numC_CG" << '\t' << "numT_CG" << '\t' << "numC_CH" << '\t' << "numT_CH" << endl;
+	for (map< string, vector< vector< vector< int > > > > :: iterator it=tagrc.begin(); it!=tagrc.end(); ++it) {
+		for (int e=0; e<it->second.size(); e++) {
+			for (int i=0; i<opts.length; i++) {
+				fout << it->first << '\t' << e << '\t' << i+1 << '\t' << it->second[e][0][i] << '\t' << it->second[e][1][i] << '\t' << it->second[e][2][i] << '\t' << it->second[e][3][i] << endl;
+			}
+		}
+	}
+	return 0;
+}
+
+int tagrcstrand2file(string & outfile, map< string, vector< vector< int > > > & tagrcstrand)
+{
+	ofstream fout(outfile);
+	fout << "tag" << '\t' << "position" << '\t' << "numC_CG" << '\t' << "numT_CG" << '\t' << "numC_CH" << '\t' << "numT_CH" << endl;
+	for (map< string, vector< vector< int > > > :: iterator it=tagrcstrand.begin(); it!=tagrcstrand.end(); ++it) {
+		for (int i=0; i<opts.length; i++) {
+			fout << it->first << '\t' << i+1 << '\t' << it->second[0][i] << '\t' << it->second[1][i] << '\t' << it->second[2][i] << '\t' << it->second[3][i] << endl;
+		}
+	}
+	return 0;
+}
+
+int methbsr2file(string & outfile, map< string, int > & tagstats, map< string, vector< double > > & methbsr, map< string, vector< double > > & methbsrstrand)
+{
+	ofstream fout(outfile);
+
+	// 24 PE pairs
+	fout << "tag" << '\t' << "numreads" << '\t' << "end1CG" << '\t' << "end1CH" << '\t' << "end2CG" << '\t' << "end2CH" << endl;
+	for (map< string, int > :: iterator it=tagstats.begin(); it!=tagstats.end(); ++it) {
+		string tag=it->first;
+		int numreads=it->second;
+		double meth1cg=methbsr[tag][0];
+		double meth1ch=methbsr[tag][1];
+		double meth2cg=methbsr[tag][2];
+		double meth2ch=methbsr[tag][3];
+		fout << tag << '\t' << numreads << '\t' << meth1cg << '\t' << meth1ch << '\t' << meth2cg << '\t' << meth2ch << endl;
+	}
+
+	// 4 single strands
+	fout << "tag" << '\t' << "methCG" << '\t' << "methCH" << endl;
+	for (map< string, vector< double > > :: iterator it=methbsrstrand.begin(); it!=methbsrstrand.end(); ++it) {
+		fout << it->first;
+		for (int i=0; i<it->second.size(); i++) {
+			fout << '\t' << it->second[i];
+		}
+		fout << endl;
+	}
+	return 0;
+}
+
+int mbiasplot(string & infile, bool pico, string & outfile) {
+	string cmd = "R --slave --no-save --no-restore --no-init-file";
+	cmd+=" -e width=6";
+	cmd+=" -e height=3";
+	if (pico) {
+		cmd+=" -e pico=T";
+	} else {
+		cmd+=" -e pico=F";
+	}
+	cmd+=" -e \"xlab='Position in read (bp)'\"";
+	cmd+=" -e \"ylab='Methylation level'\"";
+	cmd+=" -e \"infile='" + infile + "'\"";
+	cmd+=" -e \"outfile='" + outfile + "'\"";
+	cmd+=" -e \"source('" + opts.rscript + "')\"";
+	cout << cmd << endl;
+	FILE *fp;
+	char info[10240];
+	fp = popen(cmd.c_str(), "r");
+	if (fp==NULL) {
+		fprintf(stderr, "popen error.\n");
+		return EXIT_FAILURE;
+	}
+	while (fgets(info, 10240, fp) != NULL) {
+		printf("%s", info);
+	}
+	pclose(fp);
+	return 0;
+}
+
 int bseqc() {
 	map< string, vector< string > > readtags; // qname->[tag1,tag2]
 	file2readtags(opts.infile, readtags);
@@ -494,8 +571,16 @@ int bseqc() {
 	map< string, int > tagstats; // tag->number
 	readtags2tagstats(readtags, tagstats);
 	bool pico=false;
-	double errorrate=1.0;
+	double errorrate=-1;
 	estimateprotocol(tagstats, pico, errorrate);
+	if (pico) {
+		cout << "Pico library construction detected. 12 positive PE mapping pairs:\n(++,+-), (+-,++), (-+,--), (--,-+), (++,N), (N,++), (+-,N), (N,+-), (-+,N), (N,-+), (--,N), (N,--)" << endl;
+	} else {
+		cout << "Traditional library construction detected. 6 positive PE mapping pairs:\n(++,+-), (-+,--), (++,N), (N,+-), (-+,N), (N,--)" << endl;
+	}
+	if (errorrate>0) {
+		cout << "Estimated error rate: " << errorrate << " , positive rate: " << 1-errorrate << endl;
+	}
 
 	map< string, vector< vector< vector< int > > > > tagreadcounts; // tag->[end1,end2]; end[12]=[CG, CH]=[[c1,...,clength],[t1,...,tlength]]
 	for (map< string, int > :: iterator it=tagstats.begin(); tagstats.end()!=it; ++it) {
@@ -504,50 +589,28 @@ int bseqc() {
 	}
 	file2tagreadcounts(opts.infile, readtags, tagreadcounts);
 
+	boost::filesystem::create_directories(boost::filesystem::path(opts.outfile).parent_path());
+	string obname=boost::filesystem::path(opts.outfile).replace_extension().string();
+	string outtagrcfile=obname+"_mbias_pe.txt";
+	tagrc2file(outtagrcfile, tagreadcounts);
+	string outtagrcplot=obname+"_mbias_pe.pdf";
+	mbiasplot(outtagrcfile, pico, outtagrcplot);
+
 	map< string, vector< double > > methbsr; // tag->[end1,end2]; end[12]=[CG, CH]
 	tagrcs2methbsr(tagreadcounts, methbsr);
 
 	map< string, vector< vector< int > > > tagrcstrand;
 	tagreadcounts2tagrcstrand(tagreadcounts, tagrcstrand);
+
+	string outtagrcstrandfile=obname+"_mbias_strand.txt";
+	tagrcstrand2file(outtagrcstrandfile, tagrcstrand);
+	string outtagrcstrandplot=obname+"_mbias_strand.pdf";
+	mbiasplot(outtagrcstrandfile, pico, outtagrcstrandplot);
+
 	map< string, vector< double > > methbsrstrand; // tag->[CG, CH]
 	tagrcs2methbsrstrand(tagrcstrand, methbsrstrand);
 
-	methbsr2file(opts.outfile, tagstats, methbsr);
-
-	cout << "tag" << '\t' << "end" << '\t' << "position" << '\t' << "numC_CG" << '\t' << "numT_CG" << '\t' << "numC_CH" << '\t' << "numT_CH" << endl;
-	for (map< string, vector< vector< vector< int > > > > :: iterator it=tagreadcounts.begin(); it!=tagreadcounts.end(); ++it) {
-		for (int e=0; e<it->second.size(); e++) {
-			for (int i=0; i<opts.length; i++) {
-				cout << it->first << '\t' << e << '\t' << i+1 << '\t' << it->second[e][0][i] << '\t' << it->second[e][1][i] << '\t' << it->second[e][2][i] << '\t' << it->second[e][3][i] << endl;
-			}
-		}
-	}
-
-	cout << "tag" << '\t' << "position" << '\t' << "numC_CG" << '\t' << "numT_CG" << '\t' << "numC_CH" << '\t' << "numT_CH" << endl;
-	for (map< string, vector< vector< int > > > :: iterator it=tagrcstrand.begin(); it!=tagrcstrand.end(); ++it) {
-		for (int i=0; i<opts.length; i++) {
-			cout << it->first << '\t' << i+1 << '\t' << it->second[0][i] << '\t' << it->second[1][i] << '\t' << it->second[2][i] << '\t' << it->second[3][i] << endl;
-		}
-	}
-
-	cout << "tag" << '\t' << "end1_methCG" << '\t' << "end1_methCH" << '\t' << "end2_methCG" << '\t' << "end2_methCH" << endl;
-	for (map< string, vector< double > > :: iterator it=methbsr.begin(); it!=methbsr.end(); ++it) {
-		cout << it->first;
-		for (int i=0; i<it->second.size(); i++) {
-			cout << '\t' << it->second[i];
-		}
-		cout << endl;
-	}
-
-	cout << "tag" << '\t' << "methCG" << '\t' << "methCH" << endl;
-	for (map< string, vector< double > > :: iterator it=methbsrstrand.begin(); it!=methbsrstrand.end(); ++it) {
-		cout << it->first;
-		for (int i=0; i<it->second.size(); i++) {
-			cout << '\t' << it->second[i];
-		}
-		cout << endl;
-	}
-
+	methbsr2file(opts.outfile, tagstats, methbsr, methbsrstrand);
 	return 0;
 }
 
