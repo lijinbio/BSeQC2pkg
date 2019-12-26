@@ -625,6 +625,9 @@ int failureqc(double errorrate, bool pico, map< string, vector< double > > &meth
 			}
 		}
 	}
+	if (failure==0) {
+		cerr << "Info: successful library." << endl;
+	}
 	return failure;
 }
 
