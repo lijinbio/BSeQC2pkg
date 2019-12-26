@@ -65,7 +65,7 @@ int parse_options(int ac, const char ** av) {
 			cout << "Examples:" <<endl;
 			cout << "  " << av[0] << " -i in.bam -o readcount.txt -r hg38.fa -l 100" << endl;
 			cout << endl;
-			cout << "Date: 2019/12/25" << endl;
+			cout << "Date: 2019/12/26" << endl;
 			cout << "Authors: Jin Li <lijin.abc@gmail.com>" << endl;
 			exit(1);
 		}
@@ -558,10 +558,74 @@ int mbiasplot(string & infile, bool pico, string & outfile) {
 		return EXIT_FAILURE;
 	}
 	while (fgets(info, 10240, fp) != NULL) {
-		printf("%s", info);
+		fprintf(stderr, "%s", info);
 	}
 	pclose(fp);
 	return 0;
+}
+
+int failureqc(double errorrate, bool pico, map< string, vector< double > > &methbsrstrand, map< string, vector< double > > &methbsr) {
+	int failure=0; // 0: pass, 1: failure, 2: warning
+	if (errorrate>0.05) {
+		cerr << "Error: too high of the mapping error rate " << errorrate << endl;
+		failure=1;
+	} else if (errorrate>0.02) {
+		cerr << "Warning: a little high of the mapping error rate " << errorrate << endl;
+		failure=2;
+	}
+
+	for (map< string, vector< double > > :: iterator it=methbsrstrand.begin(); it!=methbsrstrand.end(); ++it) {
+		double bcr=1.0-it->second[1];
+		if (bcr<0.95) {
+			cerr << "Error: too low of the bisulfite conversion rate " << bcr << " for strand " << it->first << endl;
+			failure=1;
+		} else if (bcr<0.98) {
+			cerr << "Warning: a little low of the bisulfite conversion rate " << bcr << " for strand " << it->first << endl;
+			if (failure==0) {
+				failure=2;
+			}
+		}
+	}
+
+	double minmeth=1.0;
+	double maxmeth=0;
+	for (map< string, vector< double > > :: iterator it=methbsrstrand.begin(); it!=methbsrstrand.end(); ++it) {
+		if (it->second[0]>maxmeth) {
+			maxmeth=it->second[0];
+		}
+		if (it->second[0]<minmeth) {
+			minmeth=it->second[0];
+		}
+	}
+	if (maxmeth-minmeth>0.05) {
+		cerr << "Error: inconsistent average methylation level in four strands" << endl;
+		failure=1;
+	}
+
+	if (pico) {
+		vector< string > tags{"++,+-", "+-,++", "-+,--", "--,-+"};
+		for (string &tag: tags) {
+			map< string, vector< double > > :: iterator it=methbsr.find(tag);
+			if (methbsr.end()!=it) {
+				if ((it->second[0]-it->second[2]>0.05) || (it->second[2]-it->second[0]>0.05)) {
+					cerr << "Error: inconsistent average methylation levels of two ends in " << tag << endl;
+					failure=1;
+				}
+			}
+		}
+	} else {
+		vector< string > tags{"++,+-", "-+,--"};
+		for (string &tag: tags) {
+			map< string, vector< double > > :: iterator it=methbsr.find(tag);
+			if (methbsr.end()!=it) {
+				if ((it->second[0]-it->second[2]>0.05) || (it->second[2]-it->second[0]>0.05)) {
+					cerr << "Error: inconsistent average methylation levels of two ends in " << tag << endl;
+					failure=1;
+				}
+			}
+		}
+	}
+	return failure;
 }
 
 int bseqc() {
@@ -611,12 +675,14 @@ int bseqc() {
 	tagrcs2methbsrstrand(tagrcstrand, methbsrstrand);
 
 	methbsr2file(opts.outfile, tagstats, methbsr, methbsrstrand);
-	return 0;
+
+	int exit_code=failureqc(errorrate, pico, methbsrstrand, methbsr);
+	return exit_code;
 }
 
 int main(int argc, const char ** argv)
 {
 	parse_options(argc, argv);
-	bseqc();
-	return 0;
+	int exit_code=bseqc();
+	return exit_code;
 }
