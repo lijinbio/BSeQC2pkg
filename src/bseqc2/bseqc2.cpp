@@ -65,7 +65,7 @@ int parse_options(int ac, const char ** av) {
 			cout << "Examples:" <<endl;
 			cout << "  " << av[0] << " -i in.bam -o readcount.txt -r hg38.fa -l 100" << endl;
 			cout << endl;
-			cout << "Date: 2019/12/26" << endl;
+			cout << "Date: 2019/12/31" << endl;
 			cout << "Authors: Jin Li <lijin.abc@gmail.com>" << endl;
 			exit(1);
 		}
@@ -656,7 +656,7 @@ int bseqc() {
 	}
 	file2tagreadcounts(opts.infile, readtags, tagreadcounts);
 
-	boost::filesystem::create_directories(boost::filesystem::path(opts.outfile).parent_path());
+	boost::filesystem::create_directories(boost::filesystem::absolute(opts.outfile).parent_path());
 	string obname=boost::filesystem::path(opts.outfile).replace_extension().string();
 	string outtagrcfile=obname+"_mbias_pe.txt";
 	tagrc2file(outtagrcfile, tagreadcounts);
