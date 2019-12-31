@@ -114,6 +114,27 @@ int parse_options(int ac, const char ** av) {
 	return 0;
 }
 
+// PE: true, SE: false
+bool estimatelayout(string & infile) {
+	samfile_t *in=0;
+	if ((in=samopen(infile.c_str(), "rb", 0))==0) {
+		cerr << "Error: not found " << infile << endl;
+		exit(-1);
+	}
+	int r=0;
+	int count=0;
+	bam1_t *b=bam_init1();
+	bool layoutpe=false;
+	while (count<1 && (r=samread(in, b))>=0) {
+		uint32_t flag=b->core.flag;
+		if (flag & 0x100) continue;
+		if (flag & 0x1) layoutpe=true;
+		count++;
+	}
+	samclose(in);
+	return layoutpe;
+}
+
 int refbychr(string infile, string chr, string & ref)
 {
 	ifstream fin(infile);
@@ -631,7 +652,7 @@ int failureqc(double errorrate, bool pico, map< string, vector< double > > &meth
 	return failure;
 }
 
-int bseqc() {
+int bseqc_pe() {
 	map< string, vector< string > > readtags; // qname->[tag1,tag2]
 	file2readtags(opts.infile, readtags);
 
@@ -681,6 +702,143 @@ int bseqc() {
 
 	int exit_code=failureqc(errorrate, pico, methbsrstrand, methbsr);
 	return exit_code;
+}
+
+int file2tagstats(string & infile, map< string, int > & tagstats) {
+	samfile_t *in=0;
+	if ((in=samopen(infile.c_str(), "rb", 0))==0) {
+		cerr << "Error: not found " << infile << endl;
+		return 1;
+	}
+	int r=0;
+	int count=0;
+	bam1_t *b=bam_init1();
+	while (count<opts.numreads && (r=samread(in, b))>=0) {
+		uint32_t flag=b->core.flag;
+		if (flag & 0x100) continue;
+		string zs=string((char *)bam_aux2Z(bam_aux_get(b, "ZS")));
+		tagstats[zs]++;
+		count++;
+	}
+	samclose(in);
+	return 0;
+}
+
+int file2tagreadcounts(string & infile, map< string, vector< vector< int > > > & tagreadcounts) {
+	samfile_t *in=0;
+	if ((in=samopen(infile.c_str(), "rb", 0))==0) {
+		cerr << "Error: not found " << infile << endl;
+		return 1;
+	}
+	int r=0;
+	int count=0;
+	bam1_t *b=bam_init1();
+	map< string, string > chrref; // chr->ref
+	while (count<opts.numreads && (r=samread(in, b))>=0) {
+		uint32_t flag=b->core.flag;
+		if (flag & 0x100) continue;
+		string chr=in->header->target_name[b->core.tid];
+		map< string, string > :: iterator itref=chrref.find(chr);
+		if (chrref.end()==itref) {
+			string ref;
+			refbychr(opts.reference, chr, ref);
+			chrref[chr]=ref;
+		}
+		string tag=string((char *)bam_aux2Z(bam_aux_get(b, "ZS")));
+		vector< vector< int > > &readcounts=tagreadcounts[tag];
+		addtag(b, chrref[chr], readcounts);
+		count++;
+	}
+	samclose(in);
+	return 0;
+}
+
+int methbsr2file(string & outfile, map< string, int > & tagstats, map< string, vector< double > > & methbsrstrand)
+{
+	ofstream fout(outfile);
+	fout << "tag" << '\t' << "numreads" << '\t' << "methCG" << '\t' << "methCH" << endl;
+	for (map< string, vector< double > > :: iterator it=methbsrstrand.begin(); it!=methbsrstrand.end(); ++it) {
+		string tag=it->first;
+		fout << tag << '\t' << tagstats[tag];
+		for (int i=0; i<it->second.size(); i++) {
+			fout << '\t' << it->second[i];
+		}
+		fout << endl;
+	}
+	return 0;
+}
+
+int failureqc(map< string, vector< double > > &methbsrstrand) {
+	int failure=0; // 0: pass, 1: failure, 2: warning
+
+	for (map< string, vector< double > > :: iterator it=methbsrstrand.begin(); it!=methbsrstrand.end(); ++it) {
+		double bcr=1.0-it->second[1];
+		if (bcr<0.95) {
+			cerr << "Error: too low of the bisulfite conversion rate " << bcr << " for strand " << it->first << endl;
+			failure=1;
+		} else if (bcr<0.98) {
+			cerr << "Warning: a little low of the bisulfite conversion rate " << bcr << " for strand " << it->first << endl;
+			if (failure==0) {
+				failure=2;
+			}
+		}
+	}
+
+	double minmeth=1.0;
+	double maxmeth=0;
+	for (map< string, vector< double > > :: iterator it=methbsrstrand.begin(); it!=methbsrstrand.end(); ++it) {
+		if (it->second[0]>maxmeth) {
+			maxmeth=it->second[0];
+		}
+		if (it->second[0]<minmeth) {
+			minmeth=it->second[0];
+		}
+	}
+	if (maxmeth-minmeth>0.05) {
+		cerr << "Error: inconsistent average methylation level in four strands" << endl;
+		failure=1;
+	}
+
+	if (failure==0) {
+		cerr << "Info: successful library." << endl;
+	}
+	return failure;
+}
+
+
+int bseqc_se() {
+	map< string, int > tagstats; // tag->number
+	file2tagstats(opts.infile, tagstats);
+
+	map< string, vector< vector< int > > > tagreadcounts; // tag->[CG_C, CG_T, CH_C, CH_T]=[[c1,...,clength],[t1,...,tlength]]
+	for (map< string, int > :: iterator it=tagstats.begin(); tagstats.end()!=it; ++it) {
+		vector< vector< int > > readcounts(4, vector< int > (opts.length, 0));
+		tagreadcounts[it->first]=readcounts;
+	}
+	file2tagreadcounts(opts.infile, tagreadcounts);
+
+	boost::filesystem::create_directories(boost::filesystem::absolute(opts.outfile).parent_path());
+	string obname=boost::filesystem::path(opts.outfile).replace_extension().string();
+
+	string outtagrcstrandfile=obname+"_mbias_strand.txt";
+	tagrcstrand2file(outtagrcstrandfile, tagreadcounts);
+	string outtagrcstrandplot=obname+"_mbias_strand.pdf";
+	mbiasplot(outtagrcstrandfile, false, outtagrcstrandplot);
+
+	map< string, vector< double > > methbsrstrand; // tag->[CG, CH]
+	tagrcs2methbsrstrand(tagreadcounts, methbsrstrand);
+
+	methbsr2file(opts.outfile, tagstats, methbsrstrand);
+	int exit_code=failureqc(methbsrstrand);
+	return exit_code;
+}
+
+int bseqc() {
+	bool layoutpe=estimatelayout(opts.infile);
+	if (layoutpe) {
+		return bseqc_pe();
+	}
+	return bseqc_se();
 }
 
 int main(int argc, const char ** argv)

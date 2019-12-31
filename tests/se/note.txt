@@ -1,0 +1,30 @@
+hg19=/mnt/folders/resource/genome/hg19/fasta/hg19_25chr/hg19.fa
+f=T1L1.bam
+../../src/bseqc2/bseqc2 -h
+Allowed options:
+  -h [ --help ]                    Produce help message.
+  -i [ --infile ] arg              Input BAM file. It should be indexed.
+  -o [ --outfile ] arg             Output statistics.
+  -r [ --reference ] arg           Reference FASTA file.
+  -l [ --length ] arg (=150)       Read length. Default: 150.
+  -n [ --numreads ] arg (=2000000) Number of reads. First `n` reads will be 
+                                   examined. Default: 2000000.
+  -s [ --rscript ] arg             Rscript for mbias plot. Default: 
+                                   `$bindir/bseqc2mbiasplot.R`.
+
+Examples:
+  ../../src/bseqc2/bseqc2 -i in.bam -o readcount.txt -r hg38.fa -l 100
+
+Date: 2019/12/31
+Authors: Jin Li <lijin.abc@gmail.com>
+../../src/bseqc2/bseqc2 -i "$f" -l 50 -r "$hg19" -o outdir/result.txt
+infile: T1L1.bam
+outfile: outdir/result.txt
+reference: /mnt/folders/resource/genome/hg19/fasta/hg19_25chr/hg19.fa
+length: 50
+numreads: 2000000
+rscript: /home/lijin/work/prj/bseqcprj/github/BSeQC2pkg/src/bseqc2/bseqc2mbiasplot.R
+R --slave --no-save --no-restore --no-init-file -e width=6 -e height=3 -e pico=F -e "xlab='Position in read (bp)'" -e "ylab='Methylation level'" -e "infile='outdir/result_mbias_strand.txt'" -e "outfile='outdir/result_mbias_strand.pdf'" -e "source('/home/lijin/work/prj/bseqcprj/github/BSeQC2pkg/src/bseqc2/bseqc2mbiasplot.R')"
+Warning: a little low of the bisulfite conversion rate 0.977574 for strand ++
+Warning: a little low of the bisulfite conversion rate 0.973345 for strand -+
+Error: inconsistent average methylation level in four strands
